@@ -1,0 +1,1462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1B6CA8">
+<title>Villa Management System</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+
+<!-- No Google scripts needed for redirect flow — uses native fetch + OAuth2 -->
+<script>
+var AUTH = {
+  CLIENT_ID : '27909020989-rgqukfjakmgb0aph9usq72c0qgtjqp2s.apps.googleusercontent.com',
+  SCOPE     : 'https://www.googleapis.com/auth/drive.file',
+  TOKEN_KEY : 'vr_access_token',
+  EXPIRY_KEY: 'vr_token_expiry',
+
+  token: null,
+
+  getRedirectURI: function() {
+    return window.location.origin;
+  },
+
+  startLogin: function() {
+    var state = Math.random().toString(36).slice(2);
+    sessionStorage.setItem('vr_oauth_state', state);
+    var url = 'https://accounts.google.com/o/oauth2/v2/auth'
+      + '?client_id='    + encodeURIComponent(this.CLIENT_ID)
+      + '&redirect_uri=' + encodeURIComponent(this.getRedirectURI())
+      + '&response_type=token'
+      + '&scope='        + encodeURIComponent(this.SCOPE)
+      + '&state='        + state
+      + '&prompt=select_account';
+    window.location.href = url;
+  },
+
+  checkRedirect: function() {
+    var hash = window.location.hash;
+    if (!hash || hash.indexOf('access_token') === -1) return false;
+    var params = {};
+    hash.replace(/^#/, '').split('&').forEach(function(p) {
+      var kv = p.split('='); params[kv[0]] = decodeURIComponent(kv[1] || '');
+    });
+    if (!params.access_token) return false;
+    history.replaceState(null, '', location.pathname + location.search);
+    var expiry = Date.now() + (parseInt(params.expires_in || 3600) - 60) * 1000;
+    localStorage.setItem(AUTH.TOKEN_KEY,  params.access_token);
+    localStorage.setItem(AUTH.EXPIRY_KEY, expiry);
+    AUTH.token = params.access_token;
+    return true;
+  },
+
+  loadSaved: function() {
+    var t = localStorage.getItem(this.TOKEN_KEY);
+    var e = parseInt(localStorage.getItem(this.EXPIRY_KEY) || '0');
+    if (t && Date.now() < e) { this.token = t; return true; }
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.EXPIRY_KEY);
+    return false;
+  },
+
+  clear: function() {
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.EXPIRY_KEY);
+    this.token = null;
+  },
+
+  apiFetch: async function(url, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['Authorization'] = 'Bearer ' + this.token;
+    var r = await fetch(url, opts);
+    if (r.status === 401) {
+      AUTH.clear();
+      showGateConnect('Session expired. Please sign in again.');
+      throw new Error('401');
+    }
+    return r;
+  }
+};
+</script>
+<style>
+:root {
+  --primary:#1B6CA8;--primary-light:#2E85C8;--primary-xlight:#EBF4FC;--primary-dark:#124f80;
+  --bg:#EEF3F8;--bg2:#E0EAF3;--surface:#FFFFFF;--surface2:#F5F8FC;
+  --border:#D0DFF0;--border2:#B8CDE6;--text:#0F2236;--text2:#3C5A72;--text3:#7A96AE;
+  --green:#148a4e;--green-bg:#E4F7EE;--red:#C0392B;--red-bg:#FCECEA;--orange:#C96B00;--orange-bg:#FEF3DC;
+  --shadow-sm:0 1px 4px rgba(27,108,168,0.07),0 1px 2px rgba(0,0,0,0.03);
+  --shadow:0 4px 20px rgba(27,108,168,0.10),0 1px 4px rgba(0,0,0,0.04);
+  --radius:14px;--radius-sm:9px;--safe-bottom:env(safe-area-inset-bottom,0px);
+  --sidebar-w:240px;--nav-h:64px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(--text);font-size:15px;min-height:100vh}
+
+/* ══ GATE SCREEN ══ */
+#app-gate{
+  position:fixed;inset:0;z-index:9999;
+  background:linear-gradient(160deg,#0b2a4a 0%,#13538a 50%,#0d3d60 100%);
+  display:flex;align-items:center;justify-content:center;
+  transition:opacity .5s ease;
+}
+#app-gate.fade-out{opacity:0;pointer-events:none}
+#app-gate::before{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(ellipse 55% 45% at 15% 25%, rgba(46,133,200,0.15) 0%, transparent 65%),
+    radial-gradient(ellipse 45% 55% at 85% 75%, rgba(91,200,245,0.10) 0%, transparent 65%);
+}
+.gate-wrap{
+  position:relative;z-index:1;
+  display:flex;flex-direction:column;align-items:center;
+  text-align:center;
+  animation:gateIn .65s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes gateIn{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+.gate-icon-ring{
+  width:80px;height:80px;border-radius:22px;
+  background:linear-gradient(135deg,rgba(255,255,255,0.16),rgba(255,255,255,0.05));
+  border:1px solid rgba(255,255,255,0.18);
+  display:flex;align-items:center;justify-content:center;font-size:38px;
+  margin-bottom:22px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.3),inset 0 1px 0 rgba(255,255,255,0.12);
+}
+.gate-title{
+  font-family:'Playfair Display',serif;
+  font-size:2.1rem;color:#fff;font-weight:700;
+  line-height:1.15;letter-spacing:-.3px;margin-bottom:8px;
+}
+.gate-tagline{
+  font-size:.72rem;color:rgba(255,255,255,.35);
+  font-weight:700;letter-spacing:2px;text-transform:uppercase;
+  margin-bottom:40px;
+}
+.gate-card{
+  width:320px;
+  background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:18px;padding:28px;
+  backdrop-filter:blur(20px);
+  box-shadow:0 20px 60px rgba(0,0,0,.35);
+}
+#gate-loading{display:flex;flex-direction:column;align-items:center;gap:14px}
+.gate-spinner{
+  width:36px;height:36px;
+  border:2.5px solid rgba(255,255,255,.10);
+  border-top-color:#5bc8f5;
+  border-radius:50%;animation:spin .75s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.gate-loading-text{font-size:.82rem;font-weight:700;color:rgba(255,255,255,.45)}
+#gate-connect{display:none;flex-direction:column;align-items:center;gap:14px}
+#gate-error{
+  width:100%;background:rgba(192,57,43,.2);border:1px solid rgba(192,57,43,.4);
+  border-radius:8px;padding:9px 12px;
+  font-size:.75rem;color:#f09090;font-weight:700;display:none;line-height:1.5;text-align:left;
+}
+.gate-btn{
+  width:100%;padding:13px 20px;
+  background:linear-gradient(135deg,#2E85C8,#124f80);
+  border:none;border-radius:11px;color:#fff;
+  font-family:'Plus Jakarta Sans',sans-serif;font-size:.92rem;font-weight:800;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;
+  box-shadow:0 4px 18px rgba(27,108,168,.45);transition:all .2s;
+}
+.gate-btn:hover{transform:translateY(-2px);box-shadow:0 7px 26px rgba(27,108,168,.55)}
+.gate-btn:active{transform:scale(.97)}
+.gate-note{font-size:.67rem;color:rgba(255,255,255,.25);font-weight:600;line-height:1.6}
+
+/* ══ APP SHELL ══ */
+.app-shell{display:flex;min-height:100vh}
+.sidebar{
+  width:var(--sidebar-w);flex-shrink:0;
+  background:linear-gradient(175deg,#1a3f66 0%,#124f80 55%,#0e3a60 100%);
+  display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;bottom:0;z-index:100;
+  box-shadow:4px 0 24px rgba(12,40,80,.22);overflow-y:auto;
+}
+.sidebar-logo{padding:26px 20px 18px;border-bottom:1px solid rgba(255,255,255,.09)}
+.logo-inner{display:flex;align-items:center;gap:11px}
+.logo-icon{width:40px;height:40px;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.18);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.logo-text{font-family:'Playfair Display',serif;font-size:1rem;color:#fff;font-weight:700;line-height:1.2}
+.logo-sub{font-size:.58rem;color:rgba(255,255,255,.4);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+.sidebar-date{margin:12px 16px 0;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.10);border-radius:7px;padding:6px 12px;font-size:.72rem;color:rgba(255,255,255,.65);font-weight:600;text-align:center}
+.sidebar-nav{flex:1;padding:18px 12px;display:flex;flex-direction:column;gap:3px}
+.nav-item{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;border:none;background:transparent;cursor:pointer;color:rgba(255,255,255,.58);font-family:'Plus Jakarta Sans',sans-serif;font-size:.88rem;font-weight:700;text-align:left;width:100%;transition:all .17s;position:relative}
+.nav-item:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.88)}
+.nav-item.active{background:rgba(255,255,255,.14);color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+.nav-item.active::before{content:'';position:absolute;left:0;top:22%;bottom:22%;width:3px;background:#5bc8f5;border-radius:0 3px 3px 0}
+.nav-icon{font-size:1.2rem;flex-shrink:0}
+.sidebar-bottom{padding:14px 16px 20px;border-top:1px solid rgba(255,255,255,.07)}
+
+/* ── Currency ── */
+.sidebar-section-label{font-size:.6rem;font-weight:800;color:rgba(255,255,255,.35);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:7px}
+.sidebar-currency-select{
+  width:100%;
+  background:#0e3a60;
+  border:1px solid rgba(255,255,255,.18);border-radius:8px;
+  color:#fff;font-family:'Plus Jakarta Sans',sans-serif;
+  font-size:.82rem;font-weight:700;padding:8px 32px 8px 12px;
+  cursor:pointer;outline:none;-webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5'%3E%3Cpolyline points='6,9 12,15 18,9'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;
+  background-attachment:local;
+}
+/* ★ FIX: dropdown options — dark bg + white text so they're readable */
+.sidebar-currency-select option{
+  background:#0e3a60;
+  color:#fff;
+  font-weight:600;
+}
+
+/* ── Drive mini status ── */
+.drive-mini{
+  margin-top:12px;display:flex;align-items:center;gap:8px;
+  padding:8px 10px;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.10);border-radius:8px;
+}
+.drive-mini-dot{width:7px;height:7px;border-radius:50%;background:#5bc8f5;flex-shrink:0}
+.drive-mini-dot.connected{background:#34c880;animation:pulse 2s infinite}
+.drive-mini-dot.syncing{background:#5bc8f5;animation:pulse .7s infinite}
+.drive-mini-dot.error{background:#e74c3c}
+.drive-mini-text{font-size:.7rem;font-weight:700;color:rgba(255,255,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drive-mini-btn{font-size:.65rem;font-weight:800;color:rgba(255,255,255,.35);background:none;border:none;cursor:pointer;padding:2px 6px;border-radius:4px;transition:all .15s;white-space:nowrap}
+.drive-mini-btn:hover{background:rgba(255,255,255,.1);color:rgba(255,255,255,.7)}
+
+/* ── ★ NEW: Logout button ── */
+.logout-btn{
+  margin-top:12px;width:100%;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  padding:10px 14px;
+  background:rgba(192,57,43,.18);
+  border:1px solid rgba(192,57,43,.35);
+  border-radius:9px;
+  color:rgba(255,160,150,.85);
+  font-family:'Plus Jakarta Sans',sans-serif;
+  font-size:.8rem;font-weight:800;
+  cursor:pointer;transition:all .18s;
+  letter-spacing:.2px;
+}
+.logout-btn:hover{
+  background:rgba(192,57,43,.32);
+  border-color:rgba(192,57,43,.55);
+  color:#ffb3ac;
+  transform:translateY(-1px);
+  box-shadow:0 3px 12px rgba(192,57,43,.25);
+}
+.logout-btn:active{transform:scale(.97)}
+.logout-icon{font-size:1rem}
+
+.sidebar-footer{padding:10px 16px 16px;font-size:.62rem;color:rgba(255,255,255,.2);text-align:center;font-weight:600}
+
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.75)}}
+
+.content-wrap{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;min-height:100vh;min-width:0}
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:15px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:90;box-shadow:0 1px 8px rgba(27,108,168,.06)}
+.topbar-title{font-family:'Playfair Display',serif;font-size:1.3rem;color:var(--primary-dark);font-weight:700}
+.topbar-sub{font-size:.78rem;color:var(--text3);font-weight:500;margin-top:1px}
+.topbar-badge{background:var(--primary-xlight);border:1px solid var(--border2);border-radius:20px;padding:5px 14px;font-size:.75rem;color:var(--primary);font-weight:800}
+main{flex:1;padding:26px 28px;width:100%}
+.tab{display:none}
+.tab.active{display:block;animation:fadeUp .2s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-sm);border:1px solid var(--border);margin-bottom:20px;overflow:hidden}
+.card-header{padding:13px 18px;border-bottom:1px solid var(--border);background:var(--surface2);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card-header-title{font-weight:800;font-size:.88rem;color:var(--primary);display:flex;align-items:center;gap:7px}
+.card-body{padding:20px}
+.form-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:1000px){.form-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.form-grid{grid-template-columns:1fr}}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group.full{grid-column:1/-1}
+.form-group.span2{grid-column:span 2}
+label{font-size:.68rem;font-weight:800;color:var(--text2);text-transform:uppercase;letter-spacing:.9px}
+input,select{background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;color:var(--text);font-family:'Plus Jakarta Sans',sans-serif;font-size:.92rem;font-weight:600;transition:border-color .18s,box-shadow .18s;outline:none;width:100%;-webkit-appearance:none;appearance:none;min-height:42px}
+input:focus,select:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(27,108,168,.10)}
+input[readonly]{color:var(--text3);background:var(--bg2)}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%231B6CA8' stroke-width='2.5'%3E%3Cpolyline points='6,9 12,15 18,9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:38px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 20px;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;font-size:.875rem;font-weight:800;transition:all .16s;min-height:40px}
+.btn:active{transform:scale(.96)}
+.btn-primary{background:linear-gradient(135deg,var(--primary-light),var(--primary-dark));color:#fff;box-shadow:0 3px 12px rgba(27,108,168,.28)}
+.btn-primary:hover{box-shadow:0 5px 18px rgba(27,108,168,.38)}
+.btn-outline{background:var(--primary-xlight);border:1.5px solid var(--border2);color:var(--primary)}
+.btn-danger{background:var(--red-bg);border:1.5px solid #f0b8b8;color:var(--red)}
+.btn-sm{padding:6px 12px;font-size:.75rem;min-height:32px}
+.btn-full{width:100%}
+.btn-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+@media(max-width:900px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:18px 18px 14px;box-shadow:var(--shadow-sm);position:relative;overflow:hidden}
+.stat-card::after{content:attr(data-icon);position:absolute;right:10px;bottom:4px;font-size:2.4rem;opacity:.07;pointer-events:none}
+.stat-label{font-size:.65rem;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.9px}
+.stat-value{font-family:'Playfair Display',serif;font-size:1.7rem;color:var(--primary-dark);margin:5px 0 2px;font-weight:700}
+.stat-note{font-size:.68rem;color:var(--text3);font-weight:600}
+#tab-dashboard .table-wrap{overflow-x:visible}
+#tab-dashboard table{min-width:unset;width:100%;table-layout:fixed}
+#tab-dashboard thead th{padding:9px 8px;font-size:.62rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#tab-dashboard tbody td{padding:9px 8px;font-size:.78rem;vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tab-dashboard table th:nth-child(1),#tab-dashboard table td:nth-child(1){width:11%}
+#tab-dashboard table th:nth-child(2),#tab-dashboard table td:nth-child(2){width:16%}
+#tab-dashboard table th:nth-child(3),#tab-dashboard table td:nth-child(3){width:9%}
+#tab-dashboard table th:nth-child(4),#tab-dashboard table td:nth-child(4){width:6%;text-align:center}
+#tab-dashboard table th:nth-child(5),#tab-dashboard table td:nth-child(5){width:10%}
+#tab-dashboard table th:nth-child(6),#tab-dashboard table td:nth-child(6){width:10%}
+#tab-dashboard table th:nth-child(7),#tab-dashboard table td:nth-child(7){width:10%}
+#tab-dashboard table th:nth-child(8),#tab-dashboard table td:nth-child(8){width:9%}
+#tab-dashboard table th:nth-child(9),#tab-dashboard table td:nth-child(9){width:9%}
+tbody tr.row-pending{background:#fff8f5}
+tbody tr.row-pending:hover{background:#fff1ec}
+tbody tr.row-unpaid{background:#fef5f5}
+tbody tr.row-unpaid:hover{background:#fdecea}
+.pending-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-right:5px;flex-shrink:0;vertical-align:middle;animation:pulse 1.6s infinite}
+.table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:.86rem;min-width:580px}
+thead tr{background:var(--surface2)}
+thead th{padding:12px 15px;text-align:left;color:var(--text2);font-weight:800;font-size:.68rem;letter-spacing:.9px;text-transform:uppercase;border-bottom:2px solid var(--border);white-space:nowrap}
+tbody tr{border-bottom:1px solid var(--bg2);transition:background .12s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:var(--surface2)}
+tbody td{padding:12px 15px;color:var(--text);vertical-align:middle}
+td:last-child{white-space:nowrap}
+.mobile-cards{display:none}
+@media(max-width:640px){.hide-mobile{display:none !important}.mobile-cards{display:block}}
+.m-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 15px;margin-bottom:11px;box-shadow:var(--shadow-sm)}
+.m-card.m-pending{border-color:#f0b8b8;background:#fff8f5}
+.m-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.m-card-villa{font-family:'Playfair Display',serif;font-size:1.08rem;color:var(--primary);font-weight:700}
+.m-card-name{font-size:.88rem;font-weight:700;color:var(--text);margin-top:1px}
+.m-card-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 16px;margin-bottom:10px}
+.m-card-item span{color:var(--text3);font-weight:700;text-transform:uppercase;font-size:.61rem;display:block;letter-spacing:.5px;margin-bottom:2px}
+.m-card-item-val{font-size:.82rem;color:var(--text);font-weight:600}
+.m-card-actions{display:flex;gap:8px;padding-top:11px;border-top:1px solid var(--bg2)}
+.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:.7rem;font-weight:800}
+.badge-green{background:var(--green-bg);color:var(--green)}
+.badge-red{background:var(--red-bg);color:var(--red)}
+.badge-orange{background:var(--orange-bg);color:var(--orange)}
+.badge-blue{background:var(--primary-xlight);color:var(--primary)}
+.villa-tag{font-family:'Playfair Display',serif;font-size:.92rem;color:var(--primary);font-weight:700;white-space:normal;word-break:break-word}
+.filter-row{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.filter-row input,.filter-row select{padding:9px 13px;font-size:.84rem;flex:1;min-width:130px}
+.dash-summary-row{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+@media(max-width:700px){.dash-summary-row{grid-template-columns:1fr}}
+.dash-sum-card{border-radius:var(--radius);padding:18px;display:flex;align-items:flex-start;gap:14px;box-shadow:var(--shadow-sm)}
+.dash-sum-icon{font-size:2.1rem;flex-shrink:0;margin-top:2px}
+.dash-sum-label{font-size:.67rem;font-weight:800;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px}
+.dash-sum-value{font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;line-height:1.1}
+.dash-sum-note{font-size:.7rem;font-weight:600;margin-top:3px}
+.dash-sum-green{background:var(--green-bg);border:1px solid #a8dfc0}
+.dash-sum-green .dash-sum-label{color:var(--green)}.dash-sum-green .dash-sum-value{color:#116640}
+.dash-sum-red{background:var(--red-bg);border:1px solid #f0b8b8}
+.dash-sum-red .dash-sum-label{color:var(--red)}.dash-sum-red .dash-sum-value{color:var(--red)}
+.dash-sum-blue{background:var(--primary-xlight);border:1px solid var(--border2)}
+.dash-sum-blue .dash-sum-label{color:var(--primary)}.dash-sum-blue .dash-sum-value{color:var(--primary-dark)}
+.bal-bar-wrap{margin-top:6px;background:var(--bg2);border-radius:4px;height:6px;overflow:hidden}
+.bal-bar-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#148a4e,#34c880);transition:width .4s}
+.bal-bar-fill.partial{background:linear-gradient(90deg,var(--orange),#f5a623)}
+.bal-bar-fill.none{background:var(--red-bg);width:100%!important}
+.month-group{margin-bottom:16px;border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm);border:1px solid var(--border)}
+.month-header{background:linear-gradient(120deg,var(--primary-xlight),#d5eaf8);border-bottom:1px solid var(--border2);padding:12px 18px;display:flex;justify-content:space-between;align-items:center}
+.month-header-title{font-family:'Playfair Display',serif;font-size:.98rem;color:var(--primary-dark);font-weight:700}
+.month-header-meta{font-size:.76rem;color:var(--text2);font-weight:700}
+.alert-banner{background:var(--orange-bg);border:1px solid #f5d07a;border-radius:var(--radius-sm);padding:11px 15px;font-size:.83rem;font-weight:700;color:var(--orange);margin-bottom:16px;display:flex;align-items:center;gap:9px}
+.empty{text-align:center;padding:40px 20px;color:var(--text3)}
+.empty-icon{font-size:2.4rem;margin-bottom:10px}
+.empty-text{font-size:.9rem;font-weight:700}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(8,25,50,.52);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(6px);padding:20px}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border-radius:var(--radius);padding:24px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;animation:modalIn .22s ease;box-shadow:var(--shadow)}
+@keyframes modalIn{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+@media(max-width:768px){
+  .modal-overlay{align-items:flex-end;padding:0}
+  .modal{border-radius:var(--radius) var(--radius) 0 0;padding-bottom:calc(24px + var(--safe-bottom));animation:slideUp .28s cubic-bezier(.34,1.2,.64,1)}
+  @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+}
+.modal-handle{width:36px;height:4px;background:var(--border2);border-radius:2px;margin:0 auto 18px;display:none}
+@media(max-width:768px){.modal-handle{display:block}}
+.modal-title{font-family:'Playfair Display',serif;font-size:1.15rem;color:var(--primary-dark);margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;font-weight:700}
+.modal-close{background:var(--bg2);border:none;color:var(--text2);cursor:pointer;font-size:1rem;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800}
+#toast{position:fixed;bottom:28px;left:calc(var(--sidebar-w) + 28px);background:var(--primary-dark);color:#fff;border-radius:30px;padding:10px 22px;font-size:.86rem;font-weight:700;z-index:9998;opacity:0;transition:all .28s;pointer-events:none;white-space:nowrap;box-shadow:0 4px 20px rgba(18,79,128,.4);transform:translateY(10px)}
+#toast.show{opacity:1;transform:translateY(0)}
+#toast.error{background:var(--red)}
+#toast.info{background:#1a6b3a}
+.mobile-header{display:none}
+.bottom-nav{display:none}
+@media(max-width:768px){
+  .sidebar{display:none}
+  .content-wrap{margin-left:0}
+  .topbar{display:none}
+  main{padding:14px 14px calc(var(--nav-h) + var(--safe-bottom) + 8px)}
+  .mobile-header{display:flex;background:linear-gradient(120deg,#1B6CA8 0%,#124f80 100%);padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top));align-items:center;justify-content:space-between;box-shadow:0 2px 16px rgba(18,79,128,.35)}
+  .bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;height:calc(var(--nav-h) + var(--safe-bottom));background:#fff;border-top:1px solid var(--border);z-index:100;box-shadow:0 -4px 20px rgba(27,108,168,.10);padding-bottom:var(--safe-bottom)}
+  #toast{left:50%;transform:translateX(-50%) translateY(10px);bottom:calc(var(--nav-h) + var(--safe-bottom) + 10px)}
+  #toast.show{transform:translateX(-50%) translateY(0)}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .form-grid{grid-template-columns:1fr 1fr}
+}
+.nav-btn-m{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:none;background:none;cursor:pointer;color:var(--text3);font-family:'Plus Jakarta Sans',sans-serif;font-size:.6rem;font-weight:800;letter-spacing:.4px;text-transform:uppercase;transition:color .18s;position:relative}
+.nav-btn-m::before{content:'';position:absolute;top:0;left:20%;right:20%;height:3px;background:var(--primary);border-radius:0 0 4px 4px;transform:scaleX(0);transition:transform .2s}
+.nav-btn-m.active{color:var(--primary)}
+.nav-btn-m.active::before{transform:scaleX(1)}
+.nav-icon-m{font-size:1.25rem;transition:transform .2s}
+.nav-btn-m.active .nav-icon-m{transform:scale(1.12)}
+.nav-btn-m:active .nav-icon-m{transform:scale(.88)}
+.danger-card{border-color:#f0b8b8 !important}
+.danger-header{background:#fff8f8 !important}
+
+/* ══ LOGOUT CONFIRM MODAL ══ */
+#logout-modal .modal{max-width:360px;text-align:center}
+.logout-modal-icon{font-size:2.8rem;margin-bottom:12px}
+.logout-modal-title{font-family:'Playfair Display',serif;font-size:1.2rem;color:var(--text);font-weight:700;margin-bottom:8px}
+.logout-modal-msg{font-size:.84rem;color:var(--text2);font-weight:600;line-height:1.6;margin-bottom:22px}
+.logout-modal-btns{display:flex;gap:10px}
+
+/* ══ TENANT INFOGRAPHIC CARDS ══ */
+.tc{
+  background:var(--surface);border-radius:12px;
+  border:1.5px solid var(--border);
+  box-shadow:0 1px 6px rgba(27,108,168,.06);
+  overflow:hidden;transition:transform .16s,box-shadow .16s;
+  position:relative;
+}
+.tc:hover{transform:translateY(-2px);box-shadow:0 5px 18px rgba(27,108,168,.12)}
+.tc.tc-danger{border-color:#f0b8b8;background:linear-gradient(150deg,#fff8f8 0%,#fff 55%)}
+.tc.tc-warn{border-color:#f5d07a;background:linear-gradient(150deg,#fffdf4 0%,#fff 55%)}
+.tc.tc-ok{border-color:#a8dfc0;background:linear-gradient(150deg,#f4fdf8 0%,#fff 55%)}
+.tc.tc-none{border-color:var(--border2)}
+.tc-accent{height:3px;width:100%}
+.tc-accent-red{background:linear-gradient(90deg,var(--red),#e57370)}
+.tc-accent-orange{background:linear-gradient(90deg,var(--orange),#f5a623)}
+.tc-accent-green{background:linear-gradient(90deg,var(--green),#34c880)}
+.tc-accent-blue{background:linear-gradient(90deg,var(--primary),var(--primary-light))}
+.tc-top{padding:10px 12px 8px;display:flex;gap:10px;align-items:center}
+.tc-ring-wrap{flex-shrink:0;position:relative;width:48px;height:48px}
+.tc-ring-wrap svg{transform:rotate(-90deg)}
+.tc-ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+.tc-ring-pct{font-family:'Playfair Display',serif;font-size:.78rem;font-weight:700;color:var(--text)}
+.tc-ring-lbl{font-size:.42rem;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
+.tc-info{flex:1;min-width:0}
+.tc-villa-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.tc-villa{font-family:'Playfair Display',serif;font-size:.95rem;color:var(--primary-dark);font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.tc-name{font-size:.76rem;font-weight:700;color:var(--text);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-status-pill{
+  display:inline-flex;align-items:center;gap:4px;flex-shrink:0;
+  padding:2px 8px;border-radius:20px;
+  font-size:.6rem;font-weight:800;letter-spacing:.2px;white-space:nowrap;
+}
+.tc-pill-red{background:var(--red-bg);color:var(--red)}
+.tc-pill-orange{background:var(--orange-bg);color:var(--orange)}
+.tc-pill-green{background:var(--green-bg);color:var(--green)}
+.tc-pill-blue{background:var(--primary-xlight);color:var(--primary)}
+.tc-divider{height:1px;background:var(--bg2);margin:0 12px}
+.tc-figures{display:grid;grid-template-columns:repeat(3,1fr);padding:7px 12px 6px;gap:2px}
+.tc-fig{text-align:center;padding:3px 0}
+.tc-fig-lbl{font-size:.53rem;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:2px}
+.tc-fig-val{font-family:'Playfair Display',serif;font-size:.8rem;font-weight:700;color:var(--text);line-height:1;word-break:break-all}
+.tc-fig-val.green{color:var(--green)}
+.tc-fig-val.red{color:var(--red)}
+.tc-fig-val.blue{color:var(--primary)}
+.tc-fig + .tc-fig{border-left:1px solid var(--bg2)}
+.tc-divider2{height:1px;background:var(--bg2);margin:0 12px}
+.tc-months-section{padding:7px 12px 9px}
+.tc-months-label{font-size:.55rem;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:5px;display:flex;justify-content:space-between;align-items:center}
+.tc-seg-bar{display:flex;height:5px;border-radius:4px;overflow:hidden;gap:1px;margin-bottom:5px}
+.tc-seg{border-radius:4px;min-width:3px;transition:width .4s}
+.tc-seg-green{background:linear-gradient(90deg,#148a4e,#34c880)}
+.tc-seg-orange{background:linear-gradient(90deg,var(--orange),#f5a623)}
+.tc-seg-red{background:linear-gradient(90deg,#c0392b,#e57370)}
+.tc-seg-empty{background:var(--bg2);flex:1}
+.tc-month-legend{display:flex;gap:10px;flex-wrap:wrap}
+.tc-legend-item{display:flex;align-items:center;gap:4px;font-size:.58rem;font-weight:700;color:var(--text3)}
+.tc-legend-dot{width:6px;height:6px;border-radius:2px;flex-shrink:0}
+.tc-footer{padding:5px 12px 8px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--bg2)}
+.tc-last-pmt{font-size:.6rem;color:var(--text3);font-weight:600}
+.tc-balance-chip{padding:2px 9px;border-radius:20px;font-family:'Playfair Display',serif;font-size:.72rem;font-weight:700}
+.tc-balance-chip.red{background:var(--red-bg);color:var(--red)}
+.tc-balance-chip.green{background:var(--green-bg);color:var(--green)}
+</style>
+</head>
+<body>
+
+<!-- ══ GATE SCREEN ══ -->
+<div id="app-gate">
+  <div class="gate-wrap">
+    <div class="gate-icon-ring">🏡</div>
+    <div class="gate-title">Villa Management<br>System</div>
+    <div class="gate-tagline">Property · Tenants · Payments</div>
+    <div class="gate-card">
+      <div id="gate-loading">
+        <div class="gate-spinner"></div>
+        <div class="gate-loading-text" id="gate-loading-text">Connecting…</div>
+      </div>
+      <div id="gate-connect">
+        <div id="gate-error"></div>
+        <button class="gate-btn" onclick="gateConnect()">
+          <svg width="18" height="18" viewBox="0 0 87.3 78"><path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/><path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/><path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/><path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/><path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 27h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/></svg>
+          Sign in with Google
+        </button>
+        <div class="gate-note">Your data is saved privately in Google Drive</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ APP ══ -->
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-inner">
+        <div class="logo-icon">🏡</div>
+        <div>
+          <div class="logo-text">Villa Management</div>
+          <div class="logo-sub">Property System</div>
+        </div>
+      </div>
+      <div class="sidebar-date" id="sidebar-date"></div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item" onclick="showTab('setup',this)"><span class="nav-icon">⚙️</span>Villa Setup</button>
+      <button class="nav-item" onclick="showTab('payments',this)"><span class="nav-icon">💳</span>Payments</button>
+      <button class="nav-item" onclick="showTab('history',this)"><span class="nav-icon">📋</span>History</button>
+      <button class="nav-item active" onclick="showTab('dashboard',this)"><span class="nav-icon">📊</span>Dashboard</button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <div class="sidebar-section-label">Currency</div>
+      <select id="currency-select" class="sidebar-currency-select" onchange="saveCurrency()">
+        <option value="SAR">SAR - Saudi Riyal</option>
+        <option value="AED">AED - UAE Dirham</option>
+        <option value="USD">USD - US Dollar</option>
+        <option value="EUR">EUR - Euro</option>
+        <option value="GBP">GBP - British Pound</option>
+        <option value="KWD">KWD - Kuwaiti Dinar</option>
+        <option value="BHD">BHD - Bahraini Dinar</option>
+        <option value="QAR">QAR - Qatari Riyal</option>
+        <option value="OMR">OMR - Omani Rial</option>
+        <option value="EGP">EGP - Egyptian Pound</option>
+        <option value="INR">INR - Indian Rupee</option>
+        <option value="PKR">PKR - Pakistani Rupee</option>
+        <option value="MYR">MYR - Malaysian Ringgit</option>
+        <option value="SGD">SGD - Singapore Dollar</option>
+        <option value="TRY">TRY - Turkish Lira</option>
+        <option value="NGN">NGN - Nigerian Naira</option>
+        <option value="ZAR">ZAR - South African Rand</option>
+      </select>
+
+      <div class="drive-mini" id="drive-mini">
+        <div class="drive-mini-dot syncing" id="drive-mini-dot"></div>
+        <div class="drive-mini-text" id="drive-mini-text">Connecting…</div>
+        <button class="drive-mini-btn" onclick="manualSync()" title="Refresh from Drive">↺</button>
+      </div>
+
+      <!-- ★ NEW: Logout button -->
+      <button class="logout-btn" onclick="openLogoutModal()">
+        <span class="logout-icon">⏻</span>
+        Sign Out
+      </button>
+    </div>
+
+    <div class="sidebar-footer">Villa Management System</div>
+  </aside>
+
+  <div class="content-wrap">
+    <div class="mobile-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="logo-icon" style="width:36px;height:36px;font-size:18px">🏡</div>
+        <div>
+          <div style="font-family:'Playfair Display',serif;font-size:1rem;color:#fff;font-weight:700;line-height:1.2">Villa Management</div>
+          <div style="font-size:.56rem;color:rgba(255,255,255,.42);letter-spacing:1.5px;text-transform:uppercase">Property System</div>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="mobile-drive-dot" style="width:8px;height:8px;border-radius:50%;background:#5bc8f5;transition:background .3s"></div>
+        <div style="background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.17);border-radius:7px;padding:5px 11px;font-size:.72rem;color:rgba(255,255,255,.85);font-weight:700" id="mobile-date"></div>
+        <!-- Mobile logout -->
+        <button onclick="openLogoutModal()" title="Sign out" style="background:rgba(192,57,43,.25);border:1px solid rgba(192,57,43,.4);border-radius:7px;padding:5px 10px;color:#ffb3ac;font-size:.72rem;font-weight:800;cursor:pointer">⏻</button>
+      </div>
+    </div>
+    <div class="topbar">
+      <div>
+        <div class="topbar-title" id="topbar-title">Dashboard</div>
+        <div class="topbar-sub" id="topbar-sub">Live summary of collections and balances</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="topbar-badge" id="topbar-date"></div>
+        <!-- Desktop topbar logout -->
+        <button onclick="openLogoutModal()" title="Sign out" style="background:var(--red-bg);border:1.5px solid #f0b8b8;border-radius:9px;padding:6px 14px;color:var(--red);font-family:'Plus Jakarta Sans',sans-serif;font-size:.78rem;font-weight:800;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .18s" onmouseover="this.style.background='#fcd5d0'" onmouseout="this.style.background='var(--red-bg)'">
+          ⏻ Sign Out
+        </button>
+      </div>
+    </div>
+    <main>
+      <!-- SETUP -->
+      <div id="tab-setup" class="tab">
+        <div class="card">
+          <div class="card-header"><div class="card-header-title">🏠 Add / Edit Villa Tenant</div></div>
+          <div class="card-body">
+            <div class="form-grid">
+              <div class="form-group"><label>Date</label><input type="date" id="s-date"></div>
+              <div class="form-group"><label>Villa No.</label><input type="text" id="s-villa" placeholder="e.g. A-101"></div>
+              <div class="form-group"><label>Contact Number</label><input type="tel" id="s-contact" placeholder="+966 5xx xxx xxxx"></div>
+              <div class="form-group span2"><label>Tenant Name</label><input type="text" id="s-name" placeholder="Full name"></div>
+              <div class="form-group"><label>Advance</label><input type="number" id="s-advance" placeholder="0" min="0" inputmode="decimal"></div>
+              <div class="form-group"><label>Monthly Rent</label><input type="number" id="s-rent" placeholder="0" min="0" inputmode="decimal"></div>
+              <div class="form-group"><label>Lease Start</label><input type="date" id="s-lease-start"></div>
+              <div class="form-group"><label>Lease End</label><input type="date" id="s-lease-end"></div>
+              <div class="form-group full"><label>Notes</label><input type="text" id="s-notes" placeholder="Additional notes…"></div>
+            </div>
+            <div class="btn-actions">
+              <button class="btn btn-primary" onclick="saveTenant()">✓ Save Tenant</button>
+              <button class="btn btn-outline" onclick="clearSetupForm()">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-header-title">📋 Registered Villas</div>
+            <span id="tenant-count" style="font-size:.78rem;color:var(--text3);font-weight:700"></span>
+          </div>
+          <div class="card-body" style="padding-bottom:12px">
+            <div class="filter-row"><input type="text" id="setup-search" placeholder="🔍 Search villa or name…" oninput="renderTenantList()"></div>
+          </div>
+          <div class="table-wrap hide-mobile">
+            <table><thead><tr><th>Date</th><th>Villa</th><th>Tenant</th><th>Contact</th><th>Advance</th><th>Monthly Rent</th><th>Lease Period</th><th>Actions</th></tr></thead>
+            <tbody id="tenant-tbody"></tbody></table>
+          </div>
+          <div class="mobile-cards" id="tenant-mobile" style="padding:0 16px 12px"></div>
+        </div>
+        <div class="card danger-card">
+          <div class="card-header danger-header"><div class="card-header-title" style="color:var(--red)">⚠️ Danger Zone</div></div>
+          <div class="card-body">
+            <p style="font-size:.84rem;color:var(--text2);margin-bottom:14px;font-weight:600">Permanently delete data. Cannot be undone.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-danger" onclick="deleteAllPayments()">🗑 Delete All Payments</button>
+              <button class="btn btn-danger" onclick="deleteAllTenants()">🗑 Delete All Tenants</button>
+              <button class="btn btn-danger" onclick="deleteEverything()" style="background:var(--red);color:#fff;border-color:var(--red)">⚠ Reset Everything</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAYMENTS -->
+      <div id="tab-payments" class="tab">
+        <div class="card">
+          <div class="card-header"><div class="card-header-title">💳 New Payment Entry</div></div>
+          <div class="card-body">
+            <div class="form-grid">
+              <div class="form-group"><label>Villa No.</label><select id="p-villa" onchange="fillPaymentTenant()"><option value="">— Select Villa —</option></select></div>
+              <div class="form-group span2"><label>Tenant Name</label><input type="text" id="p-name" readonly placeholder="Auto-filled"></div>
+              <div class="form-group"><label>Payment Month</label><input type="month" id="p-month"></div>
+              <div class="form-group"><label>Payment Date</label><input type="date" id="p-date"></div>
+              <div class="form-group"><label>Amount Paid</label><input type="number" id="p-amount" placeholder="0" min="0" inputmode="decimal"></div>
+              <div class="form-group"><label>Payment Method</label><select id="p-method"><option>Cash</option><option>Bank Transfer</option><option>Cheque</option><option>Online</option></select></div>
+              <div class="form-group"><label>Status</label><select id="p-status"><option value="Paid">Paid</option><option value="Partial">Partial</option><option value="Pending">Pending</option></select></div>
+              <div class="form-group"><label>Receipt / Ref No.</label><input type="text" id="p-ref" placeholder="Optional"></div>
+              <div class="form-group full"><label>Remarks</label><input type="text" id="p-remarks" placeholder="Late fee, discount, etc."></div>
+            </div>
+            <div class="btn-actions">
+              <button class="btn btn-primary" onclick="savePayment()">✓ Record Payment</button>
+              <button class="btn btn-outline" onclick="clearPaymentForm()">✕ Clear</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-header-title">🕐 Recent Payments</div></div>
+          <div class="card-body" style="padding-bottom:12px">
+            <div class="filter-row">
+              <input type="text" id="pay-search" placeholder="🔍 Search…" oninput="renderPaymentsTable()">
+              <select id="pay-filter-status" onchange="renderPaymentsTable()"><option value="">All Status</option><option>Paid</option><option>Partial</option><option>Pending</option></select>
+              <input type="month" id="pay-filter-month" oninput="renderPaymentsTable()">
+            </div>
+          </div>
+          <div class="table-wrap hide-mobile">
+            <table><thead><tr><th>Month</th><th>Date</th><th>Villa</th><th>Tenant</th><th>Paid</th><th>Remaining</th><th>Method</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="payments-tbody"></tbody></table>
+          </div>
+          <div class="mobile-cards" id="payments-mobile" style="padding:0 16px 12px"></div>
+        </div>
+      </div>
+
+      <!-- HISTORY -->
+      <div id="tab-history" class="tab">
+        <div class="filter-row">
+          <select id="hist-villa" onchange="renderHistory()" style="flex:1"><option value="">All Villas</option></select>
+          <select id="hist-year" onchange="renderHistory()" style="flex:1"><option value="">All Years</option></select>
+          <button class="btn btn-outline btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
+        </div>
+        <div id="history-container"></div>
+      </div>
+
+      <!-- DASHBOARD -->
+      <div id="tab-dashboard" class="tab active">
+        <div class="stats-grid" id="stats-row"></div>
+        <div class="dash-summary-row" id="dash-summary-row"></div>
+        <div id="pending-alerts"></div>
+        <div class="filter-row" style="margin-bottom:16px">
+          <select id="dash-month-filter" onchange="renderDashboard()" style="flex:0 0 240px"><option value="">All Months</option></select>
+          <span style="font-size:.78rem;color:var(--text3);font-weight:700;align-self:center">Filter by month</span>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-header-title">🏠 Tenant Balance Details</div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:.72rem;color:var(--red);font-weight:700;display:flex;align-items:center;gap:5px"><span class="pending-dot"></span>Pending first</span>
+              <span id="dash-tenant-count" style="font-size:.78rem;color:var(--text3);font-weight:700"></span>
+            </div>
+          </div>
+          <div id="tenant-cards-grid" style="padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<nav class="bottom-nav">
+  <button class="nav-btn-m" onclick="showTab('setup',this)"><span class="nav-icon-m">⚙️</span>Setup</button>
+  <button class="nav-btn-m" onclick="showTab('payments',this)"><span class="nav-icon-m">💳</span>Payments</button>
+  <button class="nav-btn-m" onclick="showTab('history',this)"><span class="nav-icon-m">📋</span>History</button>
+  <button class="nav-btn-m active" onclick="showTab('dashboard',this)"><span class="nav-icon-m">📊</span>Dashboard</button>
+</nav>
+
+<!-- MODALS -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal"><div class="modal-handle"></div>
+    <div class="modal-title">Edit Payment <button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr">
+      <div class="form-group"><label>Month</label><input type="month" id="e-month"></div>
+      <div class="form-group"><label>Date</label><input type="date" id="e-date"></div>
+      <div class="form-group"><label>Amount</label><input type="number" id="e-amount" inputmode="decimal"></div>
+      <div class="form-group"><label>Method</label><select id="e-method"><option>Cash</option><option>Bank Transfer</option><option>Cheque</option><option>Online</option></select></div>
+      <div class="form-group"><label>Status</label><select id="e-status"><option>Paid</option><option>Partial</option><option>Pending</option></select></div>
+      <div class="form-group"><label>Reference</label><input type="text" id="e-ref"></div>
+      <div class="form-group full"><label>Remarks</label><input type="text" id="e-remarks"></div>
+    </div>
+    <div class="btn-actions" style="margin-top:16px"><button class="btn btn-primary btn-full" onclick="updatePayment()">✓ Update Payment</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="tenant-edit-modal">
+  <div class="modal"><div class="modal-handle"></div>
+    <div class="modal-title">Edit Tenant <button class="modal-close" onclick="document.getElementById('tenant-edit-modal').classList.remove('open')">✕</button></div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr">
+      <div class="form-group"><label>Date</label><input type="date" id="te-date"></div>
+      <div class="form-group"><label>Villa No.</label><input type="text" id="te-villa" readonly style="background:var(--bg2)"></div>
+      <div class="form-group full"><label>Tenant Name</label><input type="text" id="te-name"></div>
+      <div class="form-group full"><label>Contact</label><input type="tel" id="te-contact"></div>
+      <div class="form-group"><label>Advance</label><input type="number" id="te-advance" inputmode="decimal"></div>
+      <div class="form-group"><label>Monthly Rent</label><input type="number" id="te-rent" inputmode="decimal"></div>
+      <div class="form-group"><label>Lease Start</label><input type="date" id="te-lease-start"></div>
+      <div class="form-group"><label>Lease End</label><input type="date" id="te-lease-end"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="te-notes"></div>
+    </div>
+    <div class="btn-actions" style="margin-top:16px"><button class="btn btn-primary btn-full" onclick="updateTenantModal()">✓ Update Tenant</button></div>
+  </div>
+</div>
+
+<!-- ★ NEW: Logout Confirmation Modal -->
+<div class="modal-overlay" id="logout-modal">
+  <div class="modal" style="max-width:360px;text-align:center">
+    <div class="modal-handle"></div>
+    <div style="font-size:2.8rem;margin-bottom:12px">👋</div>
+    <div style="font-family:'Playfair Display',serif;font-size:1.2rem;color:var(--text);font-weight:700;margin-bottom:8px">Sign Out?</div>
+    <div style="font-size:.84rem;color:var(--text2);font-weight:600;line-height:1.6;margin-bottom:22px">
+      Your data is safely saved in Google Drive.<br>You'll need to sign in again next time.
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-outline btn-full" onclick="closeLogoutModal()">Cancel</button>
+      <button class="btn btn-full" onclick="signOut()" style="background:linear-gradient(135deg,#c0392b,#96281b);color:#fff;box-shadow:0 3px 12px rgba(192,57,43,.3)">⏻ Sign Out</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════
+//  APP STATE
+// ════════════════════════════════════════════════
+const FILE_NAME = 'villaledger-data.json';
+
+let driveFileId  = localStorage.getItem('vr_drive_file_id') || null;
+let driveReady   = false;
+let syncTimer    = null;
+
+let tenants  = [];
+let payments = [];
+let editIdx  = null, tenantEditIdx = null;
+let currentCurrency = localStorage.getItem('vr_currency') || 'SAR';
+
+// ════════════════════════════════════════════════
+//  BOOT
+// ════════════════════════════════════════════════
+(async function boot() {
+  var fromRedirect = AUTH.checkRedirect();
+  if (!fromRedirect && !AUTH.loadSaved()) { showGateConnect(); return; }
+  setGateLoading('Loading your data…');
+  try {
+    await findOrCreateFile();
+    await loadFromDrive();
+    driveReady = true;
+    updateDriveUI('connected');
+    hideGate();
+  } catch(e) {
+    if (e.message === '401') return;
+    showGateConnect('Could not load data: ' + (e.message || 'Drive error'));
+  }
+})();
+
+// ── Gate UI helpers ──
+function setGateLoading(msg) {
+  document.getElementById('gate-loading').style.display = 'flex';
+  document.getElementById('gate-connect').style.display = 'none';
+  document.getElementById('gate-loading-text').textContent = msg;
+}
+function showGateConnect(err) {
+  document.getElementById('gate-loading').style.display = 'none';
+  document.getElementById('gate-connect').style.display = 'flex';
+  const errEl = document.getElementById('gate-error');
+  if (err) { errEl.textContent = '⚠ ' + err; errEl.style.display = 'block'; }
+  else errEl.style.display = 'none';
+}
+function hideGate() {
+  const g = document.getElementById('app-gate');
+  g.classList.add('fade-out');
+  setTimeout(() => g.style.display = 'none', 520);
+}
+function gateConnect() { AUTH.startLogin(); }
+
+// ── ★ NEW: Logout modal helpers ──
+function openLogoutModal()  { document.getElementById('logout-modal').classList.add('open'); }
+function closeLogoutModal() { document.getElementById('logout-modal').classList.remove('open'); }
+
+function signOut() {
+  closeLogoutModal();
+  AUTH.clear();
+  localStorage.removeItem('vr_drive_file_id');
+  driveReady = false;
+  location.reload();
+}
+
+// ════════════════════════════════════════════════
+//  DRIVE FILE OPS
+// ════════════════════════════════════════════════
+async function driveList(q) {
+  const r = await AUTH.apiFetch(
+    'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(q) +
+    '&fields=files(id)&spaces=drive'
+  );
+  return await r.json();
+}
+async function driveGetMedia(fileId) {
+  const r = await AUTH.apiFetch(
+    'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media'
+  );
+  return await r.text();
+}
+async function drivePatchMedia(fileId, content) {
+  await AUTH.apiFetch(
+    'https://www.googleapis.com/upload/drive/v3/files/' + fileId + '?uploadType=media',
+    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: content }
+  );
+}
+async function driveCreateFile(content) {
+  const bound = 'vlb314159';
+  const meta  = JSON.stringify({ name: FILE_NAME, mimeType: 'application/json' });
+  const body  = '--' + bound + '\r\nContent-Type: application/json\r\n\r\n' + meta +
+                '\r\n--' + bound + '\r\nContent-Type: application/json\r\n\r\n' + content +
+                '\r\n--' + bound + '--';
+  const r = await AUTH.apiFetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+    { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + bound }, body }
+  );
+  const d = await r.json();
+  return d.id;
+}
+async function findOrCreateFile() {
+  if (driveFileId) return;
+  const data = await driveList("name='" + FILE_NAME + "' and trashed=false");
+  if (data.files && data.files.length > 0) {
+    driveFileId = data.files[0].id;
+    localStorage.setItem('vr_drive_file_id', driveFileId);
+  } else {
+    const empty = JSON.stringify({ tenants: [], payments: [], lastSaved: new Date().toISOString() });
+    driveFileId = await driveCreateFile(empty);
+    localStorage.setItem('vr_drive_file_id', driveFileId);
+  }
+}
+async function loadFromDrive() {
+  if (!driveFileId) await findOrCreateFile();
+  try {
+    const text = await driveGetMedia(driveFileId);
+    const data = JSON.parse(text);
+    tenants  = Array.isArray(data.tenants)  ? data.tenants  : [];
+    payments = Array.isArray(data.payments) ? data.payments : [];
+    if (data.currency) {
+      currentCurrency = data.currency;
+      localStorage.setItem('vr_currency', currentCurrency);
+      const s = document.getElementById('currency-select');
+      if (s) s.value = currentCurrency;
+    }
+    renderAll();
+  } catch(e) {
+    if (e.message === '401') throw e;
+    driveFileId = null;
+    localStorage.removeItem('vr_drive_file_id');
+    await findOrCreateFile();
+  }
+}
+async function saveToDrive() {
+  if (!driveReady || !driveFileId) return;
+  const content = JSON.stringify({ tenants, payments, currency: currentCurrency, lastSaved: new Date().toISOString() });
+  await drivePatchMedia(driveFileId, content);
+  updateDriveUI('connected');
+}
+function save() {
+  if (!driveReady) return;
+  updateDriveUI('syncing');
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    try { await saveToDrive(); }
+    catch(e) { updateDriveUI('error'); toast('Drive sync failed. Try Refresh.', 'error'); }
+  }, 900);
+}
+async function manualSync() {
+  if (!driveReady) { toast('Not connected to Drive', 'error'); return; }
+  updateDriveUI('syncing');
+  try { await loadFromDrive(); updateDriveUI('connected'); toast('✓ Data refreshed', 'info'); }
+  catch(e) { updateDriveUI('error'); toast('Sync failed', 'error'); }
+}
+function updateDriveUI(status) {
+  const dot  = document.getElementById('drive-mini-dot');
+  const txt  = document.getElementById('drive-mini-text');
+  const mDot = document.getElementById('mobile-drive-dot');
+  const map  = {
+    connected:    { t: 'Synced ✓',      dc: 'connected', mc: '#34c880' },
+    syncing:      { t: 'Saving…',       dc: 'syncing',   mc: '#5bc8f5' },
+    error:        { t: 'Sync error',    dc: 'error',     mc: '#e74c3c' },
+    disconnected: { t: 'Not connected', dc: '',          mc: '#666'    }
+  };
+  const s = map[status] || map.disconnected;
+  if (dot)  dot.className = 'drive-mini-dot ' + s.dc;
+  if (txt)  txt.textContent = s.t;
+  if (mDot) mDot.style.background = s.mc;
+}
+
+// ════════════════════════════════════════════════
+//  APP INIT
+// ════════════════════════════════════════════════
+const tabMeta = {
+  setup:    {title:'Villa Setup',    sub:'Register and manage villa tenant information'},
+  payments: {title:'Record Payment', sub:'Log monthly rent payments per villa'},
+  history:  {title:'Payment History',sub:'Monthly records grouped by period'},
+  dashboard:{title:'Dashboard',      sub:'Live summary of collections and balances'}
+};
+const now = new Date();
+function fmtDate(d){if(!d)return'—';const dt=new Date(d+'T00:00:00');if(isNaN(dt))return d;const dd=String(dt.getDate()).padStart(2,'0');const mmm=dt.toLocaleDateString('en-US',{month:'short'});const yyyy=dt.getFullYear();return`${dd}-${mmm}-${yyyy}`;}
+const dateStr = fmtDate(now.toISOString().split('T')[0]);
+['sidebar-date','mobile-date','topbar-date'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=dateStr;});
+document.getElementById('s-date').value = now.toISOString().split('T')[0];
+document.getElementById('p-date').value = now.toISOString().split('T')[0];
+document.getElementById('p-month').value = now.toISOString().slice(0,7);
+const cSel = document.getElementById('currency-select');
+if (cSel) cSel.value = currentCurrency;
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.nav-item,.nav-btn-m').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.querySelectorAll('.nav-item,.nav-btn-m').forEach(b=>{
+    if((b.getAttribute('onclick')||'').includes("'"+name+"'")) b.classList.add('active');
+  });
+  const m = tabMeta[name] || {};
+  document.getElementById('topbar-title').textContent = m.title || '';
+  document.getElementById('topbar-sub').textContent   = m.sub   || '';
+  window.scrollTo({top:0, behavior:'smooth'});
+  if (name==='payments')  { renderPaymentsTable(); populateVillaSelect('p-villa'); }
+  if (name==='history')   { renderHistory(); populateHistoryFilters(); }
+  if (name==='dashboard') renderDashboard();
+}
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show' + (type==='error'?' error': type==='info'?' info':'');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.className='', 3200);
+}
+function renderAll() {
+  renderTenantList();
+  renderDashboard();
+  const at = document.querySelector('.tab.active'); if (!at) return;
+  const n = at.id.replace('tab-','');
+  if (n==='payments')  { renderPaymentsTable(); populateVillaSelect('p-villa'); }
+  if (n==='history')   { renderHistory(); populateHistoryFilters(); }
+}
+
+// ── Tenants ──
+function saveTenant() {
+  const villa = document.getElementById('s-villa').value.trim();
+  const name  = document.getElementById('s-name').value.trim();
+  if (!villa||!name) { toast('Villa No. and Name are required.','error'); return; }
+  const entry = {
+    id: Date.now(), date: document.getElementById('s-date').value,
+    villa, name, contact: document.getElementById('s-contact').value.trim(),
+    advance: parseFloat(document.getElementById('s-advance').value)||0,
+    rent:    parseFloat(document.getElementById('s-rent').value)||0,
+    leaseStart: document.getElementById('s-lease-start').value,
+    leaseEnd:   document.getElementById('s-lease-end').value,
+    notes: document.getElementById('s-notes').value.trim()
+  };
+  const idx = tenants.findIndex(t=>t.villa===villa);
+  if (idx>=0) { entry.id=tenants[idx].id; tenants[idx]=entry; toast('Tenant updated.'); }
+  else { tenants.push(entry); toast('Tenant saved.'); }
+  save(); renderTenantList(); clearSetupForm();
+}
+function clearSetupForm() {
+  ['s-villa','s-name','s-contact','s-advance','s-rent','s-lease-start','s-lease-end','s-notes']
+    .forEach(id=>document.getElementById(id).value='');
+}
+function openTenantEdit(idx) {
+  tenantEditIdx = idx;
+  const t = tenants[idx];
+  document.getElementById('te-date').value       = t.date||'';
+  document.getElementById('te-villa').value      = t.villa;
+  document.getElementById('te-name').value       = t.name;
+  document.getElementById('te-contact').value    = t.contact||'';
+  document.getElementById('te-advance').value    = t.advance;
+  document.getElementById('te-rent').value       = t.rent;
+  document.getElementById('te-lease-start').value= t.leaseStart||'';
+  document.getElementById('te-lease-end').value  = t.leaseEnd||'';
+  document.getElementById('te-notes').value      = t.notes||'';
+  document.getElementById('tenant-edit-modal').classList.add('open');
+}
+function updateTenantModal() {
+  if (tenantEditIdx===null) return;
+  tenants[tenantEditIdx] = {...tenants[tenantEditIdx],
+    date:       document.getElementById('te-date').value,
+    name:       document.getElementById('te-name').value,
+    contact:    document.getElementById('te-contact').value,
+    advance:    parseFloat(document.getElementById('te-advance').value)||0,
+    rent:       parseFloat(document.getElementById('te-rent').value)||0,
+    leaseStart: document.getElementById('te-lease-start').value,
+    leaseEnd:   document.getElementById('te-lease-end').value,
+    notes:      document.getElementById('te-notes').value
+  };
+  save();
+  document.getElementById('tenant-edit-modal').classList.remove('open');
+  renderTenantList(); toast('Tenant updated.');
+}
+function deleteTenant(idx) {
+  if (!confirm('Remove villa "'+tenants[idx].villa+'"?')) return;
+  tenants.splice(idx,1); save(); renderTenantList(); toast('Tenant removed.');
+}
+function renderTenantList() {
+  const q = document.getElementById('setup-search').value.toLowerCase();
+  const filtered = tenants.filter(t=>t.villa.toLowerCase().includes(q)||t.name.toLowerCase().includes(q));
+  document.getElementById('tenant-count').textContent = filtered.length+' villa'+(filtered.length!==1?'s':'');
+  const empty = `<div class="empty"><div class="empty-icon">🏠</div><div class="empty-text">No villas registered yet</div></div>`;
+  if (!filtered.length) {
+    document.getElementById('tenant-tbody').innerHTML = `<tr><td colspan="8">${empty}</td></tr>`;
+    document.getElementById('tenant-mobile').innerHTML = empty; return;
+  }
+  document.getElementById('tenant-tbody').innerHTML = filtered.map(t=>{
+    const ri = tenants.indexOf(t);
+    return `<tr>
+      <td style="font-size:.82rem;color:var(--text3)">${fmtDate(t.date)}</td>
+      <td><span class="villa-tag">${t.villa}</span></td>
+      <td style="font-weight:700">${t.name}</td>
+      <td style="font-size:.82rem">${t.contact||'—'}</td>
+      <td style="font-weight:700">${fmt(t.advance)}</td>
+      <td style="font-weight:800;color:var(--primary)">${fmt(t.rent)}</td>
+      <td style="font-size:.76rem;color:var(--text3);white-space:nowrap">${fmtDate(t.leaseStart)} → ${fmtDate(t.leaseEnd)}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openTenantEdit(${ri})">✎ Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTenant(${ri})" style="margin-left:5px">✕</button>
+      </td></tr>`;
+  }).join('');
+  document.getElementById('tenant-mobile').innerHTML = filtered.map(t=>{
+    const ri = tenants.indexOf(t);
+    return `<div class="m-card">
+      <div class="m-card-top">
+        <div><div class="m-card-villa">${t.villa}</div><div class="m-card-name">${t.name}</div></div>
+        <span class="badge badge-blue">${fmt(t.rent)}/mo</span>
+      </div>
+      <div class="m-card-grid">
+        <div class="m-card-item"><span>Contact</span><div class="m-card-item-val">${t.contact||'—'}</div></div>
+        <div class="m-card-item"><span>Advance</span><div class="m-card-item-val">${fmt(t.advance)}</div></div>
+        <div class="m-card-item"><span>Lease Start</span><div class="m-card-item-val">${fmtDate(t.leaseStart)}</div></div>
+        <div class="m-card-item"><span>Lease End</span><div class="m-card-item-val">${fmtDate(t.leaseEnd)}</div></div>
+      </div>
+      <div class="m-card-actions">
+        <button class="btn btn-outline btn-sm" style="flex:1" onclick="openTenantEdit(${ri})">✎ Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTenant(${ri})">✕</button>
+      </div></div>`;
+  }).join('');
+}
+
+// ── Payments ──
+function populateVillaSelect(id) {
+  const sel = document.getElementById(id), cur = sel.value;
+  sel.innerHTML = '<option value="">— Select Villa —</option>' +
+    tenants.map(t=>`<option value="${t.villa}">${t.villa} — ${t.name}</option>`).join('');
+  sel.value = cur;
+}
+function fillPaymentTenant() {
+  const villa = document.getElementById('p-villa').value;
+  const t = tenants.find(t=>t.villa===villa);
+  document.getElementById('p-name').value = t ? t.name : '';
+  if (t) document.getElementById('p-amount').value = t.rent || '';
+}
+function savePayment() {
+  const villa = document.getElementById('p-villa').value;
+  const month = document.getElementById('p-month').value;
+  if (!villa||!month) { toast('Villa and Month are required.','error'); return; }
+  payments.push({
+    id: Date.now(), villa, month,
+    name:    document.getElementById('p-name').value,
+    date:    document.getElementById('p-date').value,
+    amount:  parseFloat(document.getElementById('p-amount').value)||0,
+    method:  document.getElementById('p-method').value,
+    status:  document.getElementById('p-status').value,
+    ref:     document.getElementById('p-ref').value.trim(),
+    remarks: document.getElementById('p-remarks').value.trim()
+  });
+  save(); renderPaymentsTable(); clearPaymentForm(); toast('Payment recorded.');
+}
+function clearPaymentForm() {
+  ['p-villa','p-name','p-month','p-amount','p-ref','p-remarks'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('p-date').value = new Date().toISOString().split('T')[0];
+}
+const bc = s => s==='Paid'?'badge-green': s==='Partial'?'badge-orange':'badge-red';
+function renderPaymentsTable() {
+  const q  = (document.getElementById('pay-search').value||'').toLowerCase();
+  const st = document.getElementById('pay-filter-status').value;
+  const mo = document.getElementById('pay-filter-month').value;
+  let data = [...payments].reverse();
+  if (q)  data = data.filter(p=>p.villa.toLowerCase().includes(q)||(p.name||'').toLowerCase().includes(q));
+  if (st) data = data.filter(p=>p.status===st);
+  if (mo) data = data.filter(p=>p.month===mo);
+  const empty = `<div class="empty"><div class="empty-icon">💳</div><div class="empty-text">No payments found</div></div>`;
+  if (!data.length) {
+    document.getElementById('payments-tbody').innerHTML = `<tr><td colspan="9">${empty}</td></tr>`;
+    document.getElementById('payments-mobile').innerHTML = empty; return;
+  }
+  document.getElementById('payments-tbody').innerHTML = data.map(p=>{
+    const ri = payments.findIndex(x=>x.id===p.id);
+    const t  = tenants.find(t=>t.villa===p.villa);
+    const rent = t?t.rent:0, rem = Math.max(0,rent-p.amount);
+    return `<tr>
+      <td style="font-weight:700">${fmtMonth(p.month)}</td>
+      <td style="font-size:.82rem;color:var(--text3)">${fmtDate(p.date)}</td>
+      <td><span class="villa-tag">${p.villa}</span></td>
+      <td style="font-weight:600">${p.name}</td>
+      <td style="font-weight:800;color:var(--primary)">${fmt(p.amount)}</td>
+      <td style="font-weight:800;color:${rem>0?'var(--red)':'var(--green)'}">
+        ${rem>0?fmt(rem):'<span class="badge badge-green">Full ✓</span>'}</td>
+      <td style="font-size:.82rem">${p.method}</td>
+      <td><span class="badge ${bc(p.status)}">${p.status}</span></td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openEditModal(${ri})">✎</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePayment(${ri})" style="margin-left:5px">✕</button>
+      </td></tr>`;
+  }).join('');
+  document.getElementById('payments-mobile').innerHTML = data.map(p=>{
+    const ri = payments.findIndex(x=>x.id===p.id);
+    const t  = tenants.find(t=>t.villa===p.villa);
+    const rent = t?t.rent:0, rem = Math.max(0,rent-p.amount);
+    return `<div class="m-card">
+      <div class="m-card-top">
+        <div><div class="m-card-villa">${p.villa}</div><div class="m-card-name">${p.name}</div></div>
+        <span class="badge ${bc(p.status)}">${p.status}</span>
+      </div>
+      <div class="m-card-grid">
+        <div class="m-card-item"><span>Month</span><div class="m-card-item-val">${fmtMonth(p.month)}</div></div>
+        <div class="m-card-item"><span>Date</span><div class="m-card-item-val">${fmtDate(p.date)}</div></div>
+        <div class="m-card-item"><span>Paid</span><div class="m-card-item-val" style="color:var(--primary);font-weight:800">${fmt(p.amount)}</div></div>
+        <div class="m-card-item"><span>Remaining</span><div class="m-card-item-val" style="color:${rem>0?'var(--red)':'var(--green)'};font-weight:800">${rem>0?fmt(rem):'Full ✓'}</div></div>
+        <div class="m-card-item"><span>Method</span><div class="m-card-item-val">${p.method}</div></div>
+        <div class="m-card-item"><span>Ref</span><div class="m-card-item-val">${p.ref||'—'}</div></div>
+      </div>
+      <div class="m-card-actions">
+        <button class="btn btn-outline btn-sm" style="flex:1" onclick="openEditModal(${ri})">✎ Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePayment(${ri})">✕</button>
+      </div></div>`;
+  }).join('');
+}
+function deletePayment(idx) {
+  if (!confirm('Delete this payment?')) return;
+  payments.splice(idx,1); save(); renderPaymentsTable(); toast('Payment deleted.');
+}
+function openEditModal(idx) {
+  editIdx = idx; const p = payments[idx];
+  document.getElementById('e-month').value   = p.month;
+  document.getElementById('e-date').value    = p.date||'';
+  document.getElementById('e-amount').value  = p.amount;
+  document.getElementById('e-method').value  = p.method;
+  document.getElementById('e-status').value  = p.status;
+  document.getElementById('e-ref').value     = p.ref||'';
+  document.getElementById('e-remarks').value = p.remarks||'';
+  document.getElementById('edit-modal').classList.add('open');
+}
+function closeModal() { document.getElementById('edit-modal').classList.remove('open'); editIdx=null; }
+function updatePayment() {
+  if (editIdx===null) return;
+  payments[editIdx] = {...payments[editIdx],
+    month:   document.getElementById('e-month').value,
+    date:    document.getElementById('e-date').value,
+    amount:  parseFloat(document.getElementById('e-amount').value)||0,
+    method:  document.getElementById('e-method').value,
+    status:  document.getElementById('e-status').value,
+    ref:     document.getElementById('e-ref').value,
+    remarks: document.getElementById('e-remarks').value
+  };
+  save(); closeModal(); renderPaymentsTable(); toast('Payment updated.');
+}
+document.querySelectorAll('.modal-overlay').forEach(el=>el.addEventListener('click',e=>{
+  if (e.target===el) { el.classList.remove('open'); editIdx=null; }
+}));
+
+// ── History ──
+function populateHistoryFilters() {
+  const vs = document.getElementById('hist-villa'), ys = document.getElementById('hist-year');
+  const cv = vs.value, cy = ys.value;
+  vs.innerHTML = '<option value="">All Villas</option>' +
+    tenants.map(t=>`<option value="${t.villa}">${t.villa} — ${t.name}</option>`).join('');
+  vs.value = cv;
+  const years = [...new Set(payments.map(p=>p.month?.split('-')[0]).filter(Boolean))].sort().reverse();
+  ys.innerHTML = '<option value="">All Years</option>' +
+    years.map(y=>`<option value="${y}">${y}</option>`).join('');
+  ys.value = cy;
+}
+function renderHistory() {
+  const vf = document.getElementById('hist-villa').value;
+  const yf = document.getElementById('hist-year').value;
+  let data = [...payments];
+  if (vf) data = data.filter(p=>p.villa===vf);
+  if (yf) data = data.filter(p=>p.month?.startsWith(yf));
+  const container = document.getElementById('history-container');
+  if (!data.length) { container.innerHTML=`<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">No history found</div></div>`; return; }
+  const grouped = {};
+  data.forEach(p=>{ const m=p.month||'Unknown'; if(!grouped[m]) grouped[m]=[]; grouped[m].push(p); });
+  container.innerHTML = Object.keys(grouped).sort().reverse().map(m=>{
+    const rows=grouped[m], total=rows.reduce((s,r)=>s+r.amount,0), paid=rows.filter(r=>r.status==='Paid').length;
+    return `<div class="month-group">
+      <div class="month-header">
+        <div class="month-header-title">📅 ${fmtMonth(m)}</div>
+        <div class="month-header-meta">${paid}/${rows.length} paid · ${fmt(total)}</div>
+      </div>
+      <div style="background:var(--surface)">
+        <div class="table-wrap hide-mobile"><table><thead><tr>
+          <th>Villa</th><th>Tenant</th><th>Date</th><th>Rent</th><th>Paid</th><th>Remaining</th><th>Method</th><th>Status</th><th>Ref</th>
+        </tr></thead><tbody>${rows.map(p=>{
+          const t=tenants.find(t=>t.villa===p.villa), rent=t?t.rent:0, rem=Math.max(0,rent-p.amount);
+          return `<tr>
+            <td><span class="villa-tag">${p.villa}</span></td>
+            <td style="font-weight:600">${p.name}</td>
+            <td style="font-size:.8rem;color:var(--text3)">${fmtDate(p.date)}</td>
+            <td style="color:var(--text2)">${fmt(rent)}</td>
+            <td style="font-weight:800;color:var(--primary)">${fmt(p.amount)}</td>
+            <td style="font-weight:800;color:${rem>0?'var(--red)':'var(--green)'}">
+              ${rem>0?fmt(rem):'<span class="badge badge-green">Full</span>'}</td>
+            <td style="font-size:.82rem">${p.method}</td>
+            <td><span class="badge ${bc(p.status)}">${p.status}</span></td>
+            <td style="font-size:.78rem;color:var(--text3)">${p.ref||'—'}</td>
+          </tr>`;
+        }).join('')}</tbody></table></div>
+        <div class="mobile-cards" style="padding:10px 14px 6px">${rows.map(p=>{
+          const t=tenants.find(t=>t.villa===p.villa), rent=t?t.rent:0, rem=Math.max(0,rent-p.amount);
+          return `<div class="m-card">
+            <div class="m-card-top">
+              <div><div class="m-card-villa">${p.villa}</div><div class="m-card-name">${p.name}</div></div>
+              <span class="badge ${bc(p.status)}">${p.status}</span>
+            </div>
+            <div class="m-card-grid">
+              <div class="m-card-item"><span>Paid</span><div class="m-card-item-val" style="color:var(--primary);font-weight:800">${fmt(p.amount)}</div></div>
+              <div class="m-card-item"><span>Remaining</span><div class="m-card-item-val" style="color:${rem>0?'var(--red)':'var(--green)'};font-weight:800">${rem>0?fmt(rem):'Full ✓'}</div></div>
+              <div class="m-card-item"><span>Method</span><div class="m-card-item-val">${p.method}</div></div>
+              <div class="m-card-item"><span>Ref</span><div class="m-card-item-val">${p.ref||'—'}</div></div>
+            </div></div>`;
+        }).join('')}</div>
+      </div></div>`;
+  }).join('');
+}
+
+// ── Dashboard ──
+function renderDashboard() {
+  const mf = document.getElementById('dash-month-filter'), curM = mf.value;
+  const allMonths = [...new Set(payments.map(p=>p.month).filter(Boolean))].sort().reverse();
+  mf.innerHTML = '<option value="">All Months</option>' +
+    allMonths.map(m=>`<option value="${m}">${fmtMonth(m)}</option>`).join('');
+  mf.value = curM;
+  const filterMonth = mf.value;
+  function monthsBetween(a,b) {
+    const r=[]; const[sy,sm]=a.split('-').map(Number); const[ey,em]=b.split('-').map(Number);
+    let y=sy,m=sm;
+    while(y<ey||(y===ey&&m<=em)) { r.push(`${y}-${String(m).padStart(2,'0')}`); m++; if(m>12){m=1;y++;} if(r.length>600)break; }
+    return r;
+  }
+  const _n=new Date(), _p=new Date(_n.getFullYear(),_n.getMonth()-1,1);
+  const todayMonth=`${_p.getFullYear()}-${String(_p.getMonth()+1).padStart(2,'0')}`;
+  const ts = tenants.map(t=>{
+    const avp=payments.filter(p=>p.villa===t.villa);
+    const pm=avp.map(p=>p.month).filter(Boolean).sort(), fpm=pm[0]||null;
+    const ls=t.leaseStart?t.leaseStart.slice(0,7):null, le=t.leaseEnd?t.leaseEnd.slice(0,7):null;
+    let rs=ls||fpm; if(ls&&fpm) rs=ls<fpm?ls:fpm;
+    const re=le&&le<todayMonth?le:todayMonth;
+    let dm=rs?monthsBetween(rs,re):[]; if(filterMonth) dm=dm.includes(filterMonth)?[filterMonth]:[];
+    const md=dm.map(mo=>{ const pay=avp.find(p=>p.month===mo); const paid=pay?pay.amount:0; return{month:mo,paid,balance:Math.max(0,t.rent-paid),pay}; });
+    const tExp=dm.length*t.rent, tPaid=md.reduce((s,d)=>s+d.paid,0), tBal=md.reduce((s,d)=>s+d.balance,0);
+    const mc=dm.length, pfm2=md.filter(d=>d.balance===0&&d.paid>0).length, um=md.filter(d=>d.paid===0).length, pm2=md.filter(d=>d.paid>0&&d.balance>0).length;
+    const pct=tExp>0?Math.min(100,Math.round(tPaid/tExp*100)):0;
+    const last=avp.filter(p=>p.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
+    return{...t,avp,md,totalPaid:tPaid,totalExpected:tExp,totalBalance:tBal,monthsCount:mc,paidFullMonths:pfm2,unpaidMonths:um,partialMonths:pm2,pct,last};
+  });
+  const sorted=[...ts].sort((a,b)=>{const aH=a.totalBalance>0?1:0,bH=b.totalBalance>0?1:0;if(aH!==bH)return bH-aH;if(aH&&bH)return b.totalBalance-a.totalBalance;return 0;});
+  const tmr=tenants.reduce((s,t)=>s+t.rent,0), tre=ts.reduce((s,t)=>s+t.totalExpected,0), tpa=ts.reduce((s,t)=>s+t.totalPaid,0), tba=ts.reduce((s,t)=>s+t.totalBalance,0);
+  const pfc=ts.filter(t=>t.pct===100&&t.monthsCount>0).length, hbc=ts.filter(t=>t.totalBalance>0).length;
+  document.getElementById('stats-row').innerHTML=`
+    <div class="stat-card" data-icon="🏠"><div class="stat-label">Total Villas</div><div class="stat-value">${tenants.length}</div><div class="stat-note">Registered units</div></div>
+    <div class="stat-card" data-icon="💰"><div class="stat-label">Monthly Rent</div><div class="stat-value" style="font-size:1.1rem">${fmt(tmr)}</div><div class="stat-note">Per month total</div></div>
+    <div class="stat-card" data-icon="✅"><div class="stat-label">Fully Paid</div><div class="stat-value" style="color:var(--green)">${pfc}</div><div class="stat-note">Tenants cleared</div></div>
+    <div class="stat-card" data-icon="⏳"><div class="stat-label">Has Balance</div><div class="stat-value" style="color:var(--red)">${hbc}</div><div class="stat-note">Tenants owing</div></div>`;
+  document.getElementById('dash-summary-row').innerHTML=`
+    <div class="dash-sum-card dash-sum-blue"><div class="dash-sum-icon">📋</div><div><div class="dash-sum-label">Total Expected</div><div class="dash-sum-value">${fmt(tre)}</div><div class="dash-sum-note">${filterMonth?fmtMonth(filterMonth):'Lease start → today'}</div></div></div>
+    <div class="dash-sum-card dash-sum-green"><div class="dash-sum-icon">💚</div><div><div class="dash-sum-label">Total Collected</div><div class="dash-sum-value">${fmt(tpa)}</div><div class="dash-sum-note">${tre>0?Math.round(tpa/tre*100):0}% of expected</div></div></div>
+    <div class="dash-sum-card dash-sum-red"><div class="dash-sum-icon">⚠️</div><div><div class="dash-sum-label">Balance Due</div><div class="dash-sum-value">${fmt(tba)}</div><div class="dash-sum-note">Unpaid + partial months</div></div></div>`;
+  document.getElementById('pending-alerts').innerHTML = hbc>0?`<div class="alert-banner">⚠️ ${hbc} tenant${hbc>1?'s have':' has'} outstanding balance — total ${fmt(tba)}</div>`:'';
+  document.getElementById('dash-tenant-count').textContent = tenants.length+' tenants';
+  const grid = document.getElementById('tenant-cards-grid');
+  if (!tenants.length) {
+    grid.innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📊</div><div class="empty-text">No villas registered</div></div>`;
+    return;
+  }
+  function ringsvg(pct, colorA, colorB) {
+    const r=19, circ=2*Math.PI*r, dash=circ*(pct/100), gap=circ-dash;
+    const uid = `rg_${pct}_${Math.random().toString(36).slice(2,6)}`;
+    return `<svg width="48" height="48" viewBox="0 0 48 48">
+      <circle cx="24" cy="24" r="${r}" fill="none" stroke="#e8eef5" stroke-width="5"/>
+      <circle cx="24" cy="24" r="${r}" fill="none"
+        stroke="url(#${uid})" stroke-width="5"
+        stroke-dasharray="${dash.toFixed(2)} ${gap.toFixed(2)}"
+        stroke-linecap="round"/>
+      <defs>
+        <linearGradient id="${uid}" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${colorA}"/>
+          <stop offset="100%" stop-color="${colorB}"/>
+        </linearGradient>
+      </defs>
+    </svg>`;
+  }
+  grid.innerHTML = sorted.map((t,i) => {
+    const hasBal = t.totalBalance > 0;
+    const isCleared = t.monthsCount > 0 && t.totalBalance === 0;
+    const noRange = t.monthsCount === 0;
+    let tcClass = 'tc-none', accentClass = 'tc-accent-blue';
+    if (noRange) { tcClass='tc-none'; accentClass='tc-accent-blue'; }
+    else if (t.unpaidMonths > 0) { tcClass='tc-danger'; accentClass='tc-accent-red'; }
+    else if (t.partialMonths > 0) { tcClass='tc-warn'; accentClass='tc-accent-orange'; }
+    else if (isCleared) { tcClass='tc-ok'; accentClass='tc-accent-green'; }
+    let ringA='#148a4e', ringB='#34c880';
+    if (t.pct===0) { ringA='#c0392b'; ringB='#e57370'; }
+    else if (t.pct<100) { ringA='#c96b00'; ringB='#f5a623'; }
+    let pillClass='tc-pill-blue', pillText='No Range', pillIcon='📭';
+    if (!noRange) {
+      if (isCleared) { pillClass='tc-pill-green'; pillText='Cleared ✓'; pillIcon='✅'; }
+      else if (t.unpaidMonths>0) { pillClass='tc-pill-red'; pillText=`${t.unpaidMonths} Month${t.unpaidMonths>1?'s':''} Unpaid`; pillIcon='⚠️'; }
+      else { pillClass='tc-pill-orange'; pillText='Partial Balance'; pillIcon='◑'; }
+    }
+    const mc = t.monthsCount || 1;
+    const wFull = Math.round(t.paidFullMonths/mc*100);
+    const wPart = Math.round(t.partialMonths/mc*100);
+    const wUnpaid = Math.round(t.unpaidMonths/mc*100);
+    const wEmpty = Math.max(0, 100-wFull-wPart-wUnpaid);
+    const segBar = t.monthsCount > 0 ? `
+      ${wFull>0?`<div class="tc-seg tc-seg-green" style="width:${wFull}%"></div>`:''}
+      ${wPart>0?`<div class="tc-seg tc-seg-orange" style="width:${wPart}%"></div>`:''}
+      ${wUnpaid>0?`<div class="tc-seg tc-seg-red" style="width:${wUnpaid}%"></div>`:''}
+      ${wEmpty>0?`<div class="tc-seg tc-seg-empty" style="width:${wEmpty}%"></div>`:''}
+    ` : `<div class="tc-seg tc-seg-empty" style="width:100%"></div>`;
+
+    return `<div class="tc ${tcClass}" style="animation:fadeUp .22s ease ${(i%12)*0.03}s both">
+      <div class="tc-accent ${accentClass}"></div>
+      <div class="tc-top">
+        <div class="tc-ring-wrap">
+          ${ringsvg(t.pct, ringA, ringB)}
+          <div class="tc-ring-center">
+            <div class="tc-ring-pct">${t.pct}%</div>
+            <div class="tc-ring-lbl">Paid</div>
+          </div>
+        </div>
+        <div class="tc-info">
+          <div class="tc-villa-row">
+            <div class="tc-villa">${hasBal?'<span class="pending-dot" style="width:6px;height:6px;margin-right:2px"></span>':''}${t.villa}</div>
+            <div class="tc-status-pill ${pillClass}">${pillText}</div>
+          </div>
+          <div class="tc-name">${t.name}</div>
+        </div>
+      </div>
+      <div class="tc-divider"></div>
+      <div class="tc-figures">
+        <div class="tc-fig"><div class="tc-fig-lbl">Expected</div><div class="tc-fig-val blue">${fmt(t.totalExpected)}</div></div>
+        <div class="tc-fig"><div class="tc-fig-lbl">Collected</div><div class="tc-fig-val green">${fmt(t.totalPaid)}</div></div>
+        <div class="tc-fig"><div class="tc-fig-lbl">Balance</div><div class="tc-fig-val ${hasBal?'red':'green'}">${hasBal?fmt(t.totalBalance):'Nil ✓'}</div></div>
+      </div>
+      <div class="tc-divider2"></div>
+      <div class="tc-months-section">
+        <div class="tc-months-label">
+          <span>${t.monthsCount} month${t.monthsCount!==1?'s':''}</span>
+          <span style="color:var(--primary);font-weight:800">${fmt(t.rent)}/mo</span>
+        </div>
+        <div class="tc-seg-bar">${segBar}</div>
+        <div class="tc-month-legend">
+          ${t.paidFullMonths>0?`<div class="tc-legend-item"><div class="tc-legend-dot" style="background:#34c880"></div>${t.paidFullMonths} Full</div>`:''}
+          ${t.partialMonths>0?`<div class="tc-legend-item"><div class="tc-legend-dot" style="background:var(--orange)"></div>${t.partialMonths} Partial</div>`:''}
+          ${t.unpaidMonths>0?`<div class="tc-legend-item"><div class="tc-legend-dot" style="background:var(--red)"></div>${t.unpaidMonths} Unpaid</div>`:''}
+          ${t.monthsCount===0?`<div class="tc-legend-item">No lease period</div>`:''}
+        </div>
+      </div>
+      <div class="tc-footer">
+        <div class="tc-last-pmt">🕐 ${t.last?fmtDate(t.last.date):'No payments'}</div>
+        <div class="tc-balance-chip ${hasBal?'red':'green'}">${hasBal?`−${fmt(t.totalBalance)}`:'Clear ✓'}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Utilities ──
+function exportCSV() {
+  const vf=document.getElementById('hist-villa').value, yf=document.getElementById('hist-year').value;
+  let data=[...payments];
+  if(vf) data=data.filter(p=>p.villa===vf);
+  if(yf) data=data.filter(p=>p.month?.startsWith(yf));
+  const h=['Month','Date','Villa','Tenant','Amount','Method','Status','Reference','Remarks'];
+  const rows=data.map(p=>[p.month,p.date,p.villa,p.name,p.amount,p.method,p.status,p.ref,p.remarks]);
+  const csv=[h,...rows].map(r=>r.map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download=`villa-payments-${yf||'all'}.csv`;
+  a.click(); toast('CSV exported.');
+}
+function deleteAllPayments(){if(!confirm('Delete ALL payments?'))return;payments=[];save();renderPaymentsTable();toast('All payments deleted.');}
+function deleteAllTenants(){if(!confirm('Delete ALL tenants?'))return;tenants=[];save();renderTenantList();toast('All tenants deleted.');}
+function deleteEverything(){if(!confirm('RESET EVERYTHING? Cannot be undone.'))return;tenants=[];payments=[];save();renderTenantList();toast('All data cleared.');}
+function saveCurrency(){
+  currentCurrency=document.getElementById('currency-select').value;
+  localStorage.setItem('vr_currency',currentCurrency);
+  save();
+  const at=document.querySelector('.tab.active');
+  if(at){const n=at.id.replace('tab-','');
+    if(n==='setup')renderTenantList();
+    if(n==='payments')renderPaymentsTable();
+    if(n==='history')renderHistory();
+    if(n==='dashboard')renderDashboard();
+  }
+  toast('Currency: '+currentCurrency);
+}
+function fmt(n){return currentCurrency+' '+(n||0).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtMonth(m){if(!m)return'—';try{return new Date(m+'-01').toLocaleDateString('en-US',{year:'numeric',month:'long'});}catch{return m;}}
+</script>
+</body>
+</html>
